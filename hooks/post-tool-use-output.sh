@@ -1,26 +1,31 @@
 #!/usr/bin/env bash
-# Claude Code PostToolUse hook — captures agent *outputs* (code written to files).
-# Pair this with post-tool-use.sh to also track the content being generated.
-#
-# Install alongside post-tool-use.sh in .claude/settings.json:
-#
-#   "matcher": "Write"   ← capture full file writes as output events
+# Claude Code PostToolUse hook — captures written content for overlap detection.
+# Attach this to Write tool calls alongside post-tool-use.sh.
 
 set -euo pipefail
 
 STORE="${CODE_DIVERGENCE_STORE:-divergence_state.json}"
-AGENT_ID="${CLAUDE_SESSION_ID:-unknown-session}"
 
 INPUT="$(cat)"
 
-CONTENT="$(echo "$INPUT" | python3 -c "
+eval "$(echo "$INPUT" | python3 - <<'PYEOF'
 import sys, json
 try:
-    d = json.load(sys.stdin)
-    print(d.get('content') or d.get('new_string') or '')
+    d = json.loads(sys.stdin.read())
+    sid     = d.get("session_id", "unknown-session")
+    inp     = d.get("tool_input", {})
+    content = inp.get("content") or inp.get("new_string") or ""
+    print(f"AGENT_ID={sid!r}")
+    # Truncate to 8KB to keep the state file manageable
+    content = content[:8192]
+    # Escape for shell assignment
+    import shlex
+    print(f"CONTENT={shlex.quote(content)}")
 except Exception:
-    print('')
-" 2>/dev/null || true)"
+    print("AGENT_ID='unknown-session'")
+    print("CONTENT=''")
+PYEOF
+)"
 
 [ -z "$CONTENT" ] && exit 0
 

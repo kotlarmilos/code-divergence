@@ -1,58 +1,48 @@
 #!/usr/bin/env bash
-# Claude Code PostToolUse hook — passively tracks every file edit without
-# the agent knowing it's being monitored.
+# Claude Code PostToolUse hook — tracks every file edit passively.
 #
-# Install in .claude/settings.json:
+# Claude Code passes a JSON object on stdin with shape:
+#   { "session_id": "...", "tool_name": "Edit", "tool_input": { "file_path": "..." }, ... }
 #
-#   {
-#     "hooks": {
-#       "PostToolUse": [{
-#         "matcher": "Edit|Write|MultiEdit",
-#         "hooks": [{
-#           "type": "command",
-#           "command": "/path/to/hooks/post-tool-use.sh"
-#         }]
-#       }]
-#     }
-#   }
-#
-# The hook receives tool input as JSON on stdin.
-# Required env vars (set by Claude Code):
-#   CLAUDE_SESSION_ID  — unique ID for this Claude session
-#   TOOL_NAME          — which tool was called
+# Wired in via .claude/settings.json — no agent instrumentation needed.
 
 set -euo pipefail
 
 STORE="${CODE_DIVERGENCE_STORE:-divergence_state.json}"
-AGENT_ID="${CLAUDE_SESSION_ID:-unknown-session}"
-TOOL="${TOOL_NAME:-unknown}"
 
-# Read stdin (tool input JSON)
-INPUT="$(cat)"
+# Parse session_id, tool_name, and file_path from stdin
+read -r -d '' INPUT || true
+INPUT="${INPUT:-$(cat)}"
 
-# Extract file path from the tool input (works for Edit, Write, MultiEdit)
-FILE_PATH="$(echo "$INPUT" | python3 -c "
+eval "$(echo "$INPUT" | python3 - <<'PYEOF'
 import sys, json
 try:
-    d = json.load(sys.stdin)
-    print(d.get('file_path') or d.get('path') or '')
-except Exception:
-    print('')
-" 2>/dev/null || true)"
+    d = json.loads(sys.stdin.read())
+    sid   = d.get("session_id", "unknown-session")
+    tool  = d.get("tool_name", "unknown")
+    inp   = d.get("tool_input", {})
+    fpath = inp.get("file_path") or inp.get("path") or ""
+    # Emit shell variable assignments
+    print(f"AGENT_ID={sid!r}")
+    print(f"TOOL={tool!r}")
+    print(f"FILE_PATH={fpath!r}")
+except Exception as e:
+    print("AGENT_ID='unknown-session'")
+    print("TOOL='unknown'")
+    print("FILE_PATH=''")
+PYEOF
+)"
 
-# Nothing to track if no file path
 [ -z "$FILE_PATH" ] && exit 0
 
-# Auto-create session on first use (idempotent)
+# Auto-create session on first use (idempotent — safe to call repeatedly)
 code-divergence --store "$STORE" new-session "$AGENT_ID" --agent-id "$AGENT_ID" 2>/dev/null || true
 
-# Record the file modification
 code-divergence --store "$STORE" track \
     --agent-id "$AGENT_ID" \
     --event file_modified \
     --file "$FILE_PATH"
 
-# Record the tool call
 code-divergence --store "$STORE" track \
     --agent-id "$AGENT_ID" \
     --event tool_call \
