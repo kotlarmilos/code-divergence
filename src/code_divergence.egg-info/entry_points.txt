@@ -1,0 +1,2 @@
+[console_scripts]
+code-divergence = code_divergence.cli:main

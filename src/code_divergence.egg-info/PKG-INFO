@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: code-divergence
+Version: 0.1.0
+Summary: Track and sensor AI agent performance: detect divergence and overlap in multi-agent workflows
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4; extra == "dev"
+Requires-Dist: pytest-cov; extra == "dev"
