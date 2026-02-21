@@ -2,11 +2,13 @@
 CLI entry point.
 
 Commands:
-  track   – record an agent event from the command line
-  report  – print a full report
-  monitor – continuously evaluate and print alerts
-  compare – compare two specific agents
-  status  – quick health summary
+  track       – record an agent event from the command line
+  report      – print a full report
+  monitor     – continuously evaluate and print alerts
+  compare     – compare two specific agents
+  status      – quick health summary
+  git-sync    – ingest agent branches from git (passive, no instrumentation needed)
+  symbols     – show which symbols (functions/classes) are being implemented by multiple agents
 """
 
 from __future__ import annotations
@@ -78,6 +80,30 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # ── status ──────────────────────────────────────────────────────────
     sub.add_parser("status", help="Quick one-line health summary")
+
+    # ── git-sync ─────────────────────────────────────────────────────────
+    p_git = sub.add_parser(
+        "git-sync",
+        help="Ingest agent branches from git — no agent instrumentation needed",
+    )
+    p_git.add_argument(
+        "branches",
+        nargs="*",
+        metavar="BRANCH",
+        help="Branches to ingest (e.g. claude/agent-auth-XYZ). "
+             "Omit to auto-discover all branches matching --prefix.",
+    )
+    p_git.add_argument("--prefix", default="claude/", help="Branch prefix for auto-discovery (default: claude/)")
+    p_git.add_argument("--base", default="main", help="Base branch to diff against (default: main)")
+    p_git.add_argument("--repo", default=".", help="Path to git repo (default: current dir)")
+    p_git.add_argument("--json", action="store_true", help="Output ingestion summary as JSON")
+
+    # ── symbols ──────────────────────────────────────────────────────────
+    p_sym = sub.add_parser(
+        "symbols",
+        help="Show functions/classes being implemented by multiple agents (strongest overlap signal)",
+    )
+    p_sym.add_argument("--json", action="store_true", help="Output as JSON")
 
     return parser
 
@@ -223,6 +249,63 @@ def cmd_compare(args, tracker: AgentTracker) -> int:
     return 0
 
 
+def cmd_git_sync(args, tracker: AgentTracker) -> int:
+    from .git_ingester import GitIngester
+
+    ingester = GitIngester(repo_path=args.repo)
+
+    if args.branches:
+        agent_ids = [
+            ingester.ingest_branch(tracker, branch=b, base=args.base)
+            for b in args.branches
+        ]
+    else:
+        agent_ids = ingester.ingest_all_agent_branches(
+            tracker, prefix=args.prefix, base=args.base
+        )
+
+    tracker.save(args.store)
+
+    if not agent_ids:
+        print(f"No branches found matching prefix '{args.prefix}'.", file=sys.stderr)
+        return 1
+
+    if args.json:
+        summary = [tracker.get_session(aid).summary() for aid in agent_ids]
+        print(json.dumps(summary, indent=2))
+    else:
+        print(f"Ingested {len(agent_ids)} branch(es):")
+        for aid in agent_ids:
+            s = tracker.get_session(aid)
+            branch = s.metadata.get("branch", aid)
+            print(f"  {branch}  →  agent_id={aid}  files={len(s.files_touched)}  commits={s.commit_count}  symbols={len(s.metadata.get('symbols_defined', []))}")
+
+    return 0
+
+
+def cmd_symbols(args, tracker: AgentTracker) -> int:
+    from .git_ingester import find_symbol_conflicts
+
+    conflicts = find_symbol_conflicts(tracker)
+
+    if not conflicts:
+        print("No shared symbols — agents are implementing distinct things.")
+        return 0
+
+    if args.json:
+        print(json.dumps([
+            {"symbol": c.symbol, "agent_ids": c.agent_ids}
+            for c in conflicts
+        ], indent=2))
+    else:
+        print(f"Shared symbols ({len(conflicts)}) — agents implementing the same thing:\n")
+        for c in conflicts:
+            print(f"  !! {c}")
+        print(f"\nRun `code-divergence report` for full divergence/overlap metrics.")
+
+    return 0
+
+
 def cmd_status(args, tracker: AgentTracker) -> int:
     sessions = tracker.sessions
     if not sessions:
@@ -267,6 +350,8 @@ def main(argv: list[str] | None = None) -> int:
         "monitor": cmd_monitor,
         "compare": cmd_compare,
         "status": cmd_status,
+        "git-sync": cmd_git_sync,
+        "symbols": cmd_symbols,
     }
 
     handler = dispatch.get(args.command)

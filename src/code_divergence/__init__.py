@@ -11,6 +11,7 @@ from .tracker import AgentTracker, AgentSession, Event, EventType
 from .metrics import DivergenceCalculator, OverlapCalculator, MetricResult
 from .sensors import PerformanceSensor, Alert, AlertLevel
 from .reporter import Reporter
+from .git_ingester import GitIngester, find_symbol_conflicts, SymbolConflict
 
 __all__ = [
     "AgentTracker",
@@ -24,6 +25,9 @@ __all__ = [
     "Alert",
     "AlertLevel",
     "Reporter",
+    "GitIngester",
+    "find_symbol_conflicts",
+    "SymbolConflict",
 ]
 
 __version__ = "0.1.0"
