@@ -132,6 +132,11 @@ class Reporter:
         sensor = PerformanceSensor(self.tracker, self._sensor_config)
         alerts = sensor.evaluate()
 
+        # Stats engine diagnostic (Layer 1-4)
+        from .stats_engine import StatsEngine
+        engine = StatsEngine(self.tracker)
+        diagnostic = engine.diagnose()
+
         return {
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "agents": [s.summary() for s in sessions],
@@ -167,6 +172,7 @@ class Reporter:
                 }
                 for a in alerts
             ],
+            "diagnostic": diagnostic.to_dict(),
         }
 
     def print_json(self, out: TextIO = sys.stdout, indent: int = 2) -> None:

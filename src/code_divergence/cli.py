@@ -9,6 +9,7 @@ Commands:
   status      – quick health summary
   git-sync    – ingest agent branches from git (passive, no instrumentation needed)
   symbols     – show which symbols (functions/classes) are being implemented by multiple agents
+  diagnose    – run full statistical engine (JSD, entropy, drift, SPC)
 """
 
 from __future__ import annotations
@@ -104,6 +105,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Show functions/classes being implemented by multiple agents (strongest overlap signal)",
     )
     p_sym.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # ── diagnose ─────────────────────────────────────────────────────────
+    p_diag = sub.add_parser(
+        "diagnose",
+        help="Run the full statistical engine: JSD, entropy, drift, and SPC analysis",
+    )
+    p_diag.add_argument("--json", action="store_true", help="Output as JSON")
+    p_diag.add_argument("--out", metavar="FILE", help="Write report to file instead of stdout")
 
     return parser
 
@@ -306,6 +315,99 @@ def cmd_symbols(args, tracker: AgentTracker) -> int:
     return 0
 
 
+def cmd_diagnose(args, tracker: AgentTracker) -> int:
+    from .stats_engine import StatsEngine
+
+    engine = StatsEngine(tracker)
+    report = engine.diagnose()
+
+    if args.json:
+        out_stream = sys.stdout
+        out_file = None
+        if getattr(args, "out", None):
+            out_file = open(args.out, "w", encoding="utf-8")
+            out_stream = out_file
+        try:
+            json.dump(report.to_dict(), out_stream, indent=2)
+            out_stream.write("\n")
+        finally:
+            if out_file:
+                out_file.close()
+    else:
+        out_stream = sys.stdout
+        out_file = None
+        if getattr(args, "out", None):
+            out_file = open(args.out, "w", encoding="utf-8")
+            out_stream = out_file
+        try:
+            _w = out_stream.write
+            _w("=" * 70 + "\n")
+            _w("  STATISTICAL ENGINE — Diagnostic Report\n")
+            _w("=" * 70 + "\n\n")
+
+            # Layer 1
+            _w("─── Layer 1: Distributional Analysis ───\n\n")
+            if report.jsd_scores:
+                for j in report.jsd_scores:
+                    dup_flag = " ⚠ NEAR-DUPLICATE" if j.is_near_duplicate else ""
+                    _w(f"  JSD({j.agent_a}, {j.agent_b}) = {j.jsd_score:.4f}{dup_flag}\n")
+            else:
+                _w("  (no pairwise comparisons)\n")
+            _w(f"\n  Routing clarity : {report.routing_clarity:.3f}\n")
+            _w(f"  Coverage mean   : {report.coverage.mean_max_similarity:.3f}\n")
+            _w(f"  Uncovered       : {report.coverage.uncovered_fraction:.1%}\n")
+            _w(f"  Uniformity      : {report.coverage.coverage_uniformity:.3f}\n\n")
+
+            # Layer 2
+            _w("─── Layer 2: Information-Theoretic Health ───\n\n")
+            for m in report.health.mutual_information:
+                red_flag = " ⚠ REDUNDANT" if m.is_redundant else ""
+                _w(f"  MI({m.agent_a}, {m.agent_b}) = {m.mi_score:.4f}{red_flag}\n")
+            _w(f"\n  Conditional entropy : {report.health.conditional_entropy:.3f}\n")
+            for aid, ent in report.health.per_agent_entropy.items():
+                _w(f"  Entropy({aid})        : {ent:.3f}\n")
+            _w("\n")
+
+            # Layer 3
+            _w("─── Layer 3: Drift Detection ───\n\n")
+            if report.drift_results:
+                for d in report.drift_results:
+                    flags = []
+                    if d.cusum_alert:
+                        flags.append("CUSUM-ALERT")
+                    if d.psi_alert:
+                        flags.append("PSI-ALERT")
+                    flag_str = f"  ⚠ {', '.join(flags)}" if flags else ""
+                    _w(f"  {d.agent_id}: KL={d.kl_divergence:.4f}  CUSUM={d.cusum_value:.4f}  PSI={d.psi:.4f}{flag_str}\n")
+            else:
+                _w("  (no drift baselines set)\n")
+            _w("\n")
+
+            # Layer 4
+            _w("─── Layer 4: Statistical Process Control ───\n\n")
+            for r in report.spc_results:
+                status = "IN CONTROL" if r.is_in_control else "OUT OF CONTROL ⚠"
+                _w(f"  {r.agent_id}: {status}")
+                if r.violations:
+                    _w(f"  violations={[v.value for v in r.violations]}")
+                _w(f"  ({len(r.chart_points)} points)\n")
+            if not report.spc_results:
+                _w("  (no sessions)\n")
+            _w("\n")
+
+            # Recommendations
+            _w("─── Recommendations ───\n\n")
+            for rec in report.recommendations:
+                severity_marker = {"ok": "✓", "info": "ℹ", "warning": "⚠", "critical": "✗"}.get(rec.severity.value, "?")
+                _w(f"  {severity_marker} [{rec.severity.value.upper()}] {rec.message}\n")
+            _w("\n" + "=" * 70 + "\n")
+        finally:
+            if out_file:
+                out_file.close()
+
+    return 0
+
+
 def cmd_status(args, tracker: AgentTracker) -> int:
     sessions = tracker.sessions
     if not sessions:
@@ -352,6 +454,7 @@ def main(argv: list[str] | None = None) -> int:
         "status": cmd_status,
         "git-sync": cmd_git_sync,
         "symbols": cmd_symbols,
+        "diagnose": cmd_diagnose,
     }
 
     handler = dispatch.get(args.command)
