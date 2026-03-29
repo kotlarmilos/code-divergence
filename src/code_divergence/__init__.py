@@ -12,6 +12,7 @@ from .metrics import DivergenceCalculator, OverlapCalculator, MetricResult
 from .sensors import PerformanceSensor, Alert, AlertLevel
 from .reporter import Reporter
 from .git_ingester import GitIngester, find_symbol_conflicts, SymbolConflict
+from .stats_engine import StatsEngine, DiagnosticReport
 
 __all__ = [
     "AgentTracker",
@@ -28,6 +29,8 @@ __all__ = [
     "GitIngester",
     "find_symbol_conflicts",
     "SymbolConflict",
+    "StatsEngine",
+    "DiagnosticReport",
 ]
 
 __version__ = "0.1.0"
